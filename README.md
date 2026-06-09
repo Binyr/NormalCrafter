@@ -53,7 +53,23 @@ git clone git@github.com:Binyr/NormalCrafter.git
 pip install -r requirements.txt
 ```
 
+#### 🍎 macOS (Apple Silicon)
 
+CUDA-only deps (`nvidia-*`, `xformers`, `triton`) and `decord` (no arm64 wheels) are stripped; runtime auto-selects the `mps` backend and falls back to `cpu`. Tested on M-series with ≥32 GB unified RAM, macOS 14+, Python 3.11–3.12.
+
+```bash
+brew install ffmpeg
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements-mac.txt
+```
+
+Notes:
+- Off-CUDA the pipeline runs in `float32` — fp16 is numerically unstable for SVD on MPS.
+- `cpu_offload` and `xformers` are skipped off-CUDA (accelerate hooks / xformers are CUDA-only); attention slicing is enabled instead.
+- First run downloads ~15 GB (SVD-XT + NormalCrafter) to `~/.cache/huggingface/`.
+- If you hit an unsupported MPS op: `PYTORCH_ENABLE_MPS_FALLBACK=1 python run.py ...`.
 
 ### 🤗 Model Zoo
 [NormalCrafter](https://huggingface.co/Yanrui95/NormalCrafter) is available in the Hugging Face Model Hub.
@@ -67,4 +83,9 @@ python run.py  --video-path examples/example_01.mp4
 #### 2. Low-resolution inference requires a GPU with ~6GB memory for 512x256 resolution:
 ```bash
 python run.py  --video-path examples/example_01.mp4 --max-res 512
+```
+
+#### 3. macOS (Apple Silicon) — start small; 1024 px may OOM at 36 GB:
+```bash
+python run.py --video-path examples/example_01.mp4 --max-res 512
 ```

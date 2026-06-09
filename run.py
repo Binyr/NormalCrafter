@@ -12,13 +12,33 @@ from normalcrafter.unet import DiffusersUNetSpatioTemporalConditionModelNormalCr
 from normalcrafter.utils import vis_sequence_normal, save_video, read_video_frames
 
 
+def _select_device():
+    if torch.cuda.is_available():
+        return "cuda"
+    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
+def _empty_cache():
+    if torch.cuda.is_available():
+        _empty_cache()
+    if hasattr(torch, "mps") and torch.backends.mps.is_available():
+        torch.mps.empty_cache()
+
+
 class DepthCrafterDemo:
     def __init__(
         self,
         unet_path: str,
         pre_train_path: str,
-        cpu_offload: str = "model",
+        cpu_offload: str = None,
     ):
+        device = _select_device()
+        # fp16 unstable on MPS for SVD; use fp32 off-CUDA
+        weight_dtype = torch.float16 if device == "cuda" else torch.float32
+        load_kwargs = {"variant": "fp16"} if device == "cuda" else {}
+
         unet = DiffusersUNetSpatioTemporalConditionModelNormalCrafter.from_pretrained(
             unet_path,
             subfolder="unet",
@@ -27,7 +47,6 @@ class DepthCrafterDemo:
         vae = AutoencoderKLTemporalDecoder.from_pretrained(
             unet_path, subfolder="vae"
         )
-        weight_dtype = torch.float16
         vae.to(dtype=weight_dtype)
         unet.to(dtype=weight_dtype)
         # load weights of other components from the provided checkpoint
@@ -36,27 +55,28 @@ class DepthCrafterDemo:
             unet=unet,
             vae=vae,
             torch_dtype=weight_dtype,
-            variant="fp16",
+            **load_kwargs,
         )
 
-        # for saving memory, we can offload the model to CPU, or even run the model sequentially to save more memory
-        if cpu_offload is not None:
+        # cpu_offload uses accelerate hooks that require CUDA — skip off-CUDA
+        if cpu_offload is not None and device == "cuda":
             if cpu_offload == "sequential":
-                # This will slow, but save more memory
                 self.pipe.enable_sequential_cpu_offload()
             elif cpu_offload == "model":
                 self.pipe.enable_model_cpu_offload()
             else:
                 raise ValueError(f"Unknown cpu offload option: {cpu_offload}")
         else:
-            self.pipe.to("cuda")
-        # enable attention slicing and xformers memory efficient attention
-        try:
-            self.pipe.enable_xformers_memory_efficient_attention()
-        except Exception as e:
-            print(e)
-            print("Xformers is not enabled")
-        # self.pipe.enable_attention_slicing()
+            self.pipe.to(device)
+        # xformers CUDA-only; attention slicing helps on MPS
+        if device == "cuda":
+            try:
+                self.pipe.enable_xformers_memory_efficient_attention()
+            except Exception as e:
+                print(e)
+                print("Xformers is not enabled")
+        else:
+            self.pipe.enable_attention_slicing()
 
     def infer(
         self,
@@ -122,7 +142,7 @@ class DepthCrafterDemo:
         )
         # clear the cache for the next video
         gc.collect()
-        torch.cuda.empty_cache()
+        _empty_cache()
         return res_path[:2]
 
 
@@ -132,7 +152,7 @@ def main(
     unet_path: str = "Yanrui95/NormalCrafter",
     pre_train_path: str = "stabilityai/stable-video-diffusion-img2vid-xt",
     process_length: int = -1,
-    cpu_offload: str = "model",
+    cpu_offload: str = None,
     target_fps: int = -1,
     seed: int = 42,
     window_size: int = 14,
@@ -163,7 +183,7 @@ def main(
         )
         # clear the cache for the next video
         gc.collect()
-        torch.cuda.empty_cache()
+        _empty_cache()
 
 
 if __name__ == "__main__":

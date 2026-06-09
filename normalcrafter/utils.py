@@ -5,15 +5,20 @@ import PIL.Image
 import matplotlib.cm as cm
 import mediapy
 import torch
-from decord import VideoReader, cpu
+import cv2
 
 
 def read_video_frames(video_path, process_length, target_fps, max_res):
     print("==> processing video: ", video_path)
-    vid = VideoReader(video_path, ctx=cpu(0))
-    print("==> original video shape: ", (len(vid), *vid.get_batch([0]).shape[1:]))
-    original_height, original_width = vid.get_batch([0]).shape[1:3]
-    
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise RuntimeError(f"cannot open video: {video_path}")
+    n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    src_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    original_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    original_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    print("==> original video shape: ", (n_frames, original_height, original_width, 3))
+
     if max(original_height, original_width) > max_res:
         scale = max_res / max(original_height, original_width)
         height = round(original_height * scale)
@@ -22,23 +27,29 @@ def read_video_frames(video_path, process_length, target_fps, max_res):
         height = original_height
         width = original_width
 
-    vid = VideoReader(video_path, ctx=cpu(0), width=width, height=height)
-
-    fps = vid.get_avg_fps() if target_fps == -1 else target_fps
-    stride = round(vid.get_avg_fps() / fps)
-    stride = max(stride, 1)
-    frames_idx = list(range(0, len(vid), stride))
-    print(
-        f"==> downsampled shape: {len(frames_idx), *vid.get_batch([0]).shape[1:]}, with stride: {stride}"
-    )
+    fps = src_fps if target_fps == -1 else target_fps
+    stride = max(round(src_fps / fps), 1)
+    frames_idx = list(range(0, n_frames, stride))
     if process_length != -1 and process_length < len(frames_idx):
         frames_idx = frames_idx[:process_length]
-    print(
-        f"==> final processing shape: {len(frames_idx), *vid.get_batch([0]).shape[1:]}"
-    )
-    frames = vid.get_batch(frames_idx).asnumpy().astype(np.uint8)
-    frames = [PIL.Image.fromarray(x) for x in frames]
+    print(f"==> final processing shape: ({len(frames_idx)}, {height}, {width}, 3)")
 
+    wanted = set(frames_idx)
+    out = {}
+    i = 0
+    last_wanted = max(frames_idx) if frames_idx else -1
+    while i <= last_wanted:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        if i in wanted:
+            if (frame.shape[1], frame.shape[0]) != (width, height):
+                frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
+            out[i] = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        i += 1
+    cap.release()
+
+    frames = [PIL.Image.fromarray(out[idx]) for idx in frames_idx if idx in out]
     return frames, fps
 
 def save_video(
