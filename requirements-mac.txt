@@ -1,0 +1,22 @@
+# Apple Silicon (M-series) requirements. Use Python 3.11 or 3.12.
+# Stripped: nvidia-cu11 wheels, xformers, triton, spaces (HF-only).
+# decord -> eva-decord (community arm64 wheels).
+
+torch>=2.3,<2.5
+accelerate==0.30.1
+diffusers==0.29.1
+transformers==4.41.2
+tokenizers==0.19.1
+safetensors>=0.4.3
+huggingface-hub==0.30.1
+
+numpy>=1.26,<2
+pillow>=10
+einops>=0.8
+fire>=0.6
+tqdm>=4.66
+matplotlib>=3.8
+opencv-python>=4.10
+mediapy>=1.2
+
+gradio>=4.44

@@ -2,7 +2,6 @@ import gc
 import os
 
 import numpy as np
-import spaces
 import gradio as gr
 import torch
 from diffusers.training_utils import set_seed
@@ -17,6 +16,28 @@ from huggingface_hub import hf_hub_download
 
 from normalcrafter.utils import read_video_frames, vis_sequence_normal, save_video
 
+
+def _select_device():
+    if torch.cuda.is_available():
+        return "cuda"
+    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
+def _empty_cache():
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    if hasattr(torch, "mps") and torch.backends.mps.is_available():
+        torch.mps.empty_cache()
+
+
+# stub @spaces.GPU decorator (HF-only) so app runs locally
+def _gpu_noop(*dargs, **dkwargs):
+    def deco(fn):
+        return fn
+    return deco
+
 examples = [
     ["examples/example_01.mp4", 1024, -1, -1],
     ["examples/example_02.mp4", 1024, -1, -1],
@@ -27,7 +48,9 @@ examples = [
 ]
 
 pretrained_model_name_or_path = "Yanrui95/NormalCrafter"
-weight_dtype = torch.float16
+DEVICE = _select_device()
+weight_dtype = torch.float16 if DEVICE == "cuda" else torch.float32
+load_kwargs = {"variant": "fp16"} if DEVICE == "cuda" else {}
 unet = DiffusersUNetSpatioTemporalConditionModelNormalCrafter.from_pretrained(
     pretrained_model_name_or_path,
     subfolder="unet",
@@ -44,12 +67,14 @@ pipe = NormalCrafterPipeline.from_pretrained(
     unet=unet,
     vae=vae,
     torch_dtype=weight_dtype,
-    variant="fp16",
+    **load_kwargs,
 )
-pipe.to("cuda")
+pipe.to(DEVICE)
+if DEVICE != "cuda":
+    pipe.enable_attention_slicing()
 
 
-@spaces.GPU(duration=120)
+@_gpu_noop(duration=120)
 def infer_depth(
     video: str,
     max_res: int = 1024,
@@ -64,7 +89,11 @@ def infer_depth(
     save_npz: bool = False,
 ):
     set_seed(seed)
-    pipe.enable_xformers_memory_efficient_attention()
+    if DEVICE == "cuda":
+        try:
+            pipe.enable_xformers_memory_efficient_attention()
+        except Exception as e:
+            print(e)
 
     frames, target_fps = read_video_frames(video, process_length, target_fps, max_res)
 
@@ -90,7 +119,7 @@ def infer_depth(
 
     # clear the cache for the next video
     gc.collect()
-    torch.cuda.empty_cache()
+    _empty_cache()
 
     return [
         save_path + "_input.mp4",
